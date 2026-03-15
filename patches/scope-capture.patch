@@ -1,0 +1,159 @@
+--- a/organya.h
++++ b/organya.h
+@@ -114,6 +114,11 @@
+ #define ORG_MELODY_CHANNEL_COUNT        8               /* Number of melody channels */
+ #define ORG_PERCUSSION_CHANNEL_COUNT    8               /* Number of percussion channels */
+ 
++/* Scope capture ring buffer constants */
++#define ORG_SCOPE_BUFFER_SIZE           1024
++#define ORG_SCOPE_BUFFER_MASK           (ORG_SCOPE_BUFFER_SIZE - 1)
++#define ORG_SCOPE_MAX_CHANNELS          (ORG_MELODY_CHANNEL_COUNT + ORG_PERCUSSION_CHANNEL_COUNT)
++
+ #define ORG_CHANNEL_COUNT               (ORG_MELODY_CHANNEL_COUNT + ORG_PERCUSSION_CHANNEL_COUNT)
+ 
+ #define ORG_PROPERTY_NOT_USED           0xFF            /* Value for event properties that aren't used */
+@@ -322,6 +327,11 @@
+         org_uint32 length;
+         org_uint8 *data;
+     } percussion_wave_data[ORG_PERCUSSION_COUNT];
++
++    /* Scope capture ring buffers for per-channel audio visualization */
++    float scope_buffer[ORG_SCOPE_MAX_CHANNELS][ORG_SCOPE_BUFFER_SIZE];
++    org_uint32 scope_write_pos[ORG_SCOPE_MAX_CHANNELS];
++    int scope_enabled;
+ } organya_context;
+ 
+ /**
+@@ -459,6 +469,28 @@
+  */
+ ORG_API void organya_context_tick(organya_context *context);
+ 
++/**
++ * Enables or disables per-channel scope capture.
++ * When enabled, individual channel audio is written to ring buffers during mixing.
++ *
++ * @param context Pointer to the organya_context structure
++ * @param enable Non-zero to enable, zero to disable
++ */
++ORG_API void organya_enable_scope_capture(organya_context *context, int enable);
++
++/**
++ * Retrieves per-channel scope data from the ring buffer.
++ * Returns the most recent samples for the specified channel.
++ *
++ * @param context Pointer to the organya_context structure
++ * @param channel Channel index (0-7 melody, 8-15 percussion)
++ * @param buffer Output buffer for float samples
++ * @param num_samples Maximum number of samples to retrieve
++ *
++ * @returns Number of samples written to buffer
++ */
++ORG_API org_uint32 organya_get_scope_data(organya_context *context, int channel, float *buffer, org_uint32 num_samples);
++
+ #ifdef __cplusplus
+ }
+ #endif
+@@ -950,17 +982,42 @@
+     /* Generate melody samples */
+     for (i = 0; i < ORG_MELODY_CHANNEL_COUNT; ++i)
+     {
++        float saved_left;
++
++        if (context->scope_enabled)
++            saved_left = buffer[0];
++
+         for (j = 0; j < 8; ++j)
+         {
+             organya_internal_sound_generate_sample(&context->melody_index[i].sounds[j][0], buffer);
+             organya_internal_sound_generate_sample(&context->melody_index[i].sounds[j][1], buffer);
+         }
++
++        if (context->scope_enabled)
++        {
++            float delta = buffer[0] - saved_left;
++            context->scope_buffer[i][context->scope_write_pos[i] & ORG_SCOPE_BUFFER_MASK] = delta;
++            context->scope_write_pos[i]++;
++        }
+     }
+ 
+     /* Generate percussion samples */
+     for (i = 0; i < ORG_PERCUSSION_CHANNEL_COUNT; ++i)
+     {
++        float saved_left;
++
++        if (context->scope_enabled)
++            saved_left = buffer[0];
++
+         organya_internal_sound_generate_sample(&context->percussion_index[i].sound, buffer);
++
++        if (context->scope_enabled)
++        {
++            float delta = buffer[0] - saved_left;
++            org_uint32 scope_ch = ORG_MELODY_CHANNEL_COUNT + i;
++            context->scope_buffer[scope_ch][context->scope_write_pos[scope_ch] & ORG_SCOPE_BUFFER_MASK] = delta;
++            context->scope_write_pos[scope_ch]++;
++        }
+     }
+ 
+     /* Apply context volume */
+@@ -1939,6 +1996,60 @@
+     }
+ }
+ 
++ORG_API void organya_enable_scope_capture(organya_context *context, int enable)
++{
++    size_t i, j;
++
++    if (context == NULL)
++    {
++        return;
++    }
++
++    context->scope_enabled = enable;
++
++    if (enable)
++    {
++        for (i = 0; i < ORG_SCOPE_MAX_CHANNELS; ++i)
++        {
++            context->scope_write_pos[i] = 0;
++            for (j = 0; j < ORG_SCOPE_BUFFER_SIZE; ++j)
++            {
++                context->scope_buffer[i][j] = 0.0f;
++            }
++        }
++    }
++}
++
++ORG_API org_uint32 organya_get_scope_data(organya_context *context, int channel, float *buffer, org_uint32 num_samples)
++{
++    org_uint32 read_pos;
++    org_uint32 i;
++
++    if (context == NULL || buffer == NULL || !context->scope_enabled)
++    {
++        return 0;
++    }
++
++    if (channel < 0 || channel >= ORG_SCOPE_MAX_CHANNELS)
++    {
++        return 0;
++    }
++
++    if (num_samples > ORG_SCOPE_BUFFER_SIZE)
++    {
++        num_samples = ORG_SCOPE_BUFFER_SIZE;
++    }
++
++    read_pos = (context->scope_write_pos[channel] - num_samples + ORG_SCOPE_BUFFER_SIZE) & ORG_SCOPE_BUFFER_MASK;
++    for (i = 0; i < num_samples; ++i)
++    {
++        buffer[i] = context->scope_buffer[channel][read_pos];
++        read_pos = (read_pos + 1) & ORG_SCOPE_BUFFER_MASK;
++    }
++
++    return num_samples;
++}
++
+ #endif /* ORGANYA_IMPLEMENTATION */
+ 
+ /*
