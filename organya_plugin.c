@@ -25,6 +25,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,6 +33,7 @@
 
 #define ORG_SAMPLE_RATE 48000
 #define ORG_CHANNELS 2
+#define ORG_SCOPE_CHANNELS 16 // 8 melody + 8 percussion voices
 #define ORG_BUFFER_SIZE 4096
 #define ORG_DEFAULT_DURATION_S 180 // 3 minutes default for looping songs
 
@@ -328,34 +330,64 @@ static void organya_plugin_event(void* user_data, uint8_t* event_data, uint64_t 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static uint32_t organya_plugin_get_scope_data(void* user_data, int channel, float* buffer, uint32_t num_samples) {
+static bool organya_plugin_get_structure(void* user_data, RVVizInfo* out) {
     OrganyaReplayerData* data = (OrganyaReplayerData*)user_data;
-    if (data == nullptr || buffer == nullptr) {
-        return 0;
+    if (data == nullptr || out == nullptr) {
+        return false;
     }
 
-    if (!data->scope_enabled) {
-        organya_enable_scope_capture(&data->ctx, 1);
-        data->scope_enabled = true;
-    }
-
-    return organya_get_scope_data(&data->ctx, channel, buffer, num_samples);
+    out->caps = RVVizCaps_Scope;
+    out->scroll_mode = RVScrollMode_Synchronized;
+    out->pattern_channel_count = 0;
+    out->scope_channel_count = ORG_SCOPE_CHANNELS;
+    out->column_count = 0;
+    return true;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static uint32_t organya_plugin_get_scope_channel_names(void* user_data, const char** names, uint32_t max_channels) {
+static uint32_t organya_plugin_get_scope_channels(void* user_data, RVChannelDesc* out, uint32_t cap) {
     (void)user_data;
+    if (out == nullptr) {
+        return 0;
+    }
+
     static const char* s_names[] = {
         "Melody 1", "Melody 2", "Melody 3", "Melody 4", "Melody 5", "Melody 6", "Melody 7", "Melody 8",
         "Perc 1",   "Perc 2",   "Perc 3",   "Perc 4",   "Perc 5",   "Perc 6",   "Perc 7",   "Perc 8",
     };
-    uint32_t count = 16;
-    if (count > max_channels)
-        count = max_channels;
-    for (uint32_t i = 0; i < count; i++)
-        names[i] = s_names[i];
+    uint32_t count = ORG_SCOPE_CHANNELS;
+    if (count > cap)
+        count = cap;
+    for (uint32_t i = 0; i < count; i++) {
+        memset(out[i].name, 0, sizeof(out[i].name));
+        snprintf((char*)out[i].name, sizeof(out[i].name), "%s", s_names[i]);
+        out[i].scope_width = 0;
+    }
     return count;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void organya_plugin_set_scope_enabled(void* user_data, bool on) {
+    OrganyaReplayerData* data = (OrganyaReplayerData*)user_data;
+    if (data == nullptr) {
+        return;
+    }
+
+    organya_enable_scope_capture(&data->ctx, on ? 1 : 0);
+    data->scope_enabled = on;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static uint32_t organya_plugin_get_scope_samples(void* user_data, int32_t channel, float* out, uint32_t cap) {
+    OrganyaReplayerData* data = (OrganyaReplayerData*)user_data;
+    if (data == nullptr || out == nullptr || !data->scope_enabled) {
+        return 0;
+    }
+
+    return organya_get_scope_data(&data->ctx, channel, out, cap);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -377,12 +409,19 @@ static RVPlaybackPlugin g_organya_plugin = {
     organya_plugin_metadata,
     organya_plugin_static_init,
     nullptr, // settings_updated
-    nullptr, // get_tracker_info
-    nullptr, // get_pattern_cell
-    nullptr, // get_pattern_num_rows
-    organya_plugin_get_scope_data,
     nullptr, // static_destroy
-    organya_plugin_get_scope_channel_names,
+
+    // Visualization: scope-only (16 Organya voices: 8 melody + 8 percussion).
+    organya_plugin_get_structure,
+    nullptr, // get_columns
+    nullptr, // get_pattern_channels
+    organya_plugin_get_scope_channels,
+    nullptr, // get_position
+    nullptr, // get_channel_rows
+    nullptr, // get_cells
+    organya_plugin_set_scope_enabled,
+    organya_plugin_get_scope_samples,
+    nullptr, // get_vu
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
