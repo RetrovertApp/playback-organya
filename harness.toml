@@ -1,0 +1,9 @@
+[plugin]
+name = "organya"
+
+[data]
+entries = []
+
+[[fixtures]]
+file = "fixtures/retrovert_selftest.org"
+sha256 = "05469c9d54a3c9088bd255c4e370b94a3ba06ad63dc6819ab29f19a8ee5a3acc"
